@@ -21,4 +21,4 @@ To download dataset and create database:
 
 run
 
- `python ingest/create_database.py {download_destination} {database_destination}` 
+ `python scripts/create_database.py {download_destination} {database_destination}` 
