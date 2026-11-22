@@ -16,10 +16,10 @@ A simulation can contain one persona set, multiple campaigns, and multiple quest
 
 The user starts by selecting **Let's Get Simulating**.
 
-They are prompted to enter a simulation name.
+They are prompted to enter a simulation name and select a model.
 
-- **Simulation Name:** Used to identify and track simulations.
-- The name does not affect the simulation itself.
+- **Simulation Name:** Used to identify and track simulations. The name does not affect the simulation itself.
+- **Model Name**: Model used to run simulation
 
 ---
 
@@ -36,6 +36,66 @@ The user uploads a file containing persona data.
 The user connects to their database and selects a table containing persona data.
 
 The user can then select the relevant population using filters before feeding the records into the simulation.
+
+**Selected Columns**
+
+The user selects which columns the simulation should retrieve from the table.
+
+The selection is stored as a dictionary:
+
+```
+{
+  "id": "persona_id",
+  "persona_column": "persona_summary",
+  "other_columns": ["age", "region", "income"]
+}
+```
+
+- `id`: Unique identifier for each persona.
+- `persona_column`: Column containing the persona representation.
+- `other_columns`: Additional attributes to retain for segmentation and analysis.
+
+**Filters**
+
+Filters are stored as a list of dictionaries. Each dictionary represents one filter.
+
+```
+[
+  {
+    "column": "age",
+    "type": "slider",
+    "values": [25, 45]
+  },
+  {
+    "column": "region",
+    "type": "multi_select",
+    "values": ["West", "South"]
+  }
+]
+```
+
+Supported filter types:
+
+| Filter type     | Operation | Values                       |
+| --------------- | --------- | ---------------------------- |
+| `single_select` | `=`       | One value                    |
+| `multi_select`  | `IN`      | List of values               |
+| `slider`        | `BETWEEN` | Minimum and maximum integers |
+
+**Schema Retrieval**
+
+When the user selects or enters a table name, the frontend retrieves its schema, including column names and data types.
+
+The available filter types are determined by the selected column's datatype. For example:
+
+| Column datatype | Available filter types                    |
+| --------------- | ----------------------------------------- |
+| INTEGER         | `single_select`, `multi_select`, `slider` |
+| REAL            | `single_select`, `multi_select`           |
+| TEXT            | `single_select`, `multi_select`           |
+| BOOLEAN         | `single_select`, `multi_select`           |
+
+The frontend only offers filter types supported by the selected column's datatype.
 
 The selected persona population applies to all campaigns within that simulation. If the user wants to simulate a different population, they create a new simulation.
 
@@ -78,7 +138,7 @@ Each campaign has its own set of questions.
 When adding questions to subsequent campaigns, the user has three options:
 
 - **Create New:** Create a question from scratch.
-- **Import:** Reuse an existing question from a saved question.
+- **Import:** Reuse an existing question from a saved question. (Will automatically mark is_saved to 1 and reuse ID)
 - **Copy:** Duplicate an existing question, prefilled with its original configuration. The user can modify any field before adding it.
 
 ### 4.4 Saving Questions
@@ -88,6 +148,13 @@ Users can save questions to a reusable question library.
 Saved questions can be imported into campaigns across different simulations.
 
 This avoids repeatedly configuring the same questions for different experiments.
+
+### Saving and Reusing Campaigns & Questions
+
+- Users can choose to save campaigns and questions for future reuse.
+- Saved campaigns and questions are persisted immediately by the frontend and become available for selection in subsequent experiments. frontend adds the question_id to the data structure for the backend to use
+- Unsaved campaigns and questions are temporary and are persisted by the backend when an experiment is initiated.
+- Both saved and unsaved records are associated with the relevant experiment when used.
 
 ---
 

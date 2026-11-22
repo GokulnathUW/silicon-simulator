@@ -78,30 +78,27 @@ Users can reuse questions through three operations:
 
 Users can also save questions to a reusable question library. Saved questions can be imported into campaigns across different simulations.
 
-## 2.4. JSON Structure
+## 2.4. Structure
 
-A simulation contains a `campaigns` array. Each campaign contains its own `questions` array.
+A simulation contains a list of `campaigns` dictionaries. Each campaign contains its own `questions` dictionaries.
 
 Each question is represented as an independent object within its campaign.
 
-## 2.5. Example JSON Skeleton
+## 2.5. Example Skeleton
 
 ```json
-{
-  "simulation_name": "",
-  "campaigns": [
-    {
-      "campaign_name": "",
-      "campaign_details": "",
-      "questions": [
-        {
-          "question_name": "",
-          "question_type": "",
-          "instruction": "",
-          "criteria": ""
-        }
-      ]
-    }
-  ]
-}
+[
+   {
+     "campaign_name": "",
+     "campaign_details": "",
+     "questions": [
+       {
+         "question_name": "",
+         "question_type": "",
+         "instruction": "",
+         "criteria": ""
+       }
+     ]
+  }
+]
 ```
