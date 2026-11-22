@@ -17,39 +17,8 @@ from questions.ad import ADS, REACTIONS
 from questions.choice import CHOICE_QUESTIONS
 from questions.yes_no import YES_NO_QUESTIONS
 
-DEFAULT_DB = ROOT / "data" / "questions.db"
-
-SCHEMA = """
-PRAGMA foreign_keys = ON;
-
-DROP TABLE IF EXISTS questions;
-DROP TABLE IF EXISTS reactions;
-
-CREATE TABLE questions (
-    category TEXT NOT NULL CHECK (category IN ('noul', 'choice', 'score')),
-    campaign TEXT NOT NULL,
-    instructions_json TEXT,
-    criteria_json TEXT,
-    CHECK (
-        (
-            category = 'score'
-            AND instructions_json IS NULL
-            AND criteria_json IS NULL
-        )
-        OR (
-            category IN ('noul', 'choice')
-            AND instructions_json IS NOT NULL
-            AND criteria_json IS NOT NULL
-        )
-    )
-);
-
-CREATE TABLE reactions (
-    name TEXT PRIMARY KEY,
-    instructions_json TEXT NOT NULL,
-    criteria_json TEXT NOT NULL
-);
-"""
+DEFAULT_DB = ROOT / "data" / "demo_questions.db"
+SCHEMA_PATH = ROOT / "sql" / "demo_questions.sql"
 
 
 def question_rows() -> list[tuple[str, str, str | None, str | None]]:
@@ -103,7 +72,7 @@ def load_questions(db_path: Path) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
         # 1. Create the tables.
-        conn.executescript(SCHEMA)
+        conn.executescript(SCHEMA_PATH.read_text())
 
         # 2. Write the questions.
         conn.executemany(
@@ -139,7 +108,7 @@ def main() -> None:
         nargs="?",
         type=Path,
         default=DEFAULT_DB,
-        help="SQLite file to create or replace (default: data/questions.db)",
+        help="SQLite file to create or replace (default: data/demo_questions.db)",
     )
     args = parser.parse_args()
     load_questions(args.db_path)
