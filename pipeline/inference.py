@@ -9,6 +9,16 @@ from typesafe_sdk import (
     TypeSafeClient,
 )
 
+_client: TypeSafeClient | None = None
+
+
+def get_client() -> TypeSafeClient:
+    """Return the shared client, creating it the first time it is needed."""
+    global _client
+    if _client is None:
+        _client = TypeSafeClient()
+    return _client
+
 
 def run_inference(
     model_name: str,
@@ -37,6 +47,4 @@ def run_inference(
             question = Score(instructions=prompt, criteria=criteria)
         questions[str(item["question_name"])] = question
 
-    # Run inference
-    with TypeSafeClient() as client:
-        return client.system_one(state=state, questions=questions, model=model_name)
+    return get_client().system_one(state=state, questions=questions, model=model_name)

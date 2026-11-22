@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 from typesafe_sdk import Choice, Noul, Score
 
+from pipeline import inference
 from pipeline.inference import run_inference
 from pipeline.prepare import create_instructions
 
@@ -29,13 +30,15 @@ def instruction(
 
 @contextmanager
 def patched_client(response: object) -> Iterator[MagicMock]:
-    """Patch TypeSafeClient and yield the client used for the call."""
+    """Patch the shared client and yield the client used for the call."""
+    inference._client = None
     with patch("pipeline.inference.TypeSafeClient") as client_cls:
         client = client_cls.return_value
-        client.__enter__.return_value = client
-        client.__exit__.return_value = None
         client.system_one.return_value = response
-        yield client
+        try:
+            yield client
+        finally:
+            inference._client = None
 
 
 class TestRunInference:
@@ -60,8 +63,6 @@ class TestRunInference:
             result = run_inference("jev", instructions, state)
 
         assert result is sentinel
-        client.__enter__.assert_called_once()
-        client.__exit__.assert_called_once()
         client.system_one.assert_called_once()
         assert client.system_one.call_args.kwargs["state"] is state
         assert client.system_one.call_args.kwargs["model"] == "jev"
@@ -121,16 +122,26 @@ class TestRunInference:
 
         assert client.system_one.call_args.kwargs["questions"] == {}
 
+    def test_repeated_calls_share_one_client(self) -> None:
+        """A later call uses the client created for the first call."""
+        instructions = [instruction("q", "choice", "Which one?", {"A": "first"})]
+        state = {"persona": "p", "campaign": "c"}
+
+        with patched_client(object()) as client:
+            run_inference("jev", instructions, state)
+            run_inference("jev", instructions, state)
+            assert inference.TypeSafeClient.call_count == 1
+
+        assert client.system_one.call_count == 2
+
     def test_client_errors_propagate(self) -> None:
-        """A client failure is raised after the client context closes."""
+        """A client failure is raised."""
         instructions = [instruction("q", "choice", "Which one?", {"A": "first"})]
 
         with patched_client(object()) as client:
             client.system_one.side_effect = RuntimeError("down")
             with pytest.raises(RuntimeError, match="down"):
                 run_inference("jev", instructions, {"persona": "p", "campaign": "c"})
-
-        client.__exit__.assert_called_once()
 
     @pytest.mark.parametrize(
         "criteria",
