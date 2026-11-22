@@ -14,6 +14,7 @@ def fetch_personas(
     table_name: str,
     filters: str | list[dict[str, object]],
     selected_columns: dict[str, object],
+    limit: int | None = None,
 ) -> tuple[dict[object, dict[str, object]], dict[object, dict[str, object]]]:
     """Return personas keyed by persona id, and a response row for each persona."""
 
@@ -64,12 +65,18 @@ def fetch_personas(
     if clauses:
         sql = f"{sql} WHERE {' AND '.join(clauses)}"
 
+    # Cap how many personas are returned.
+    if limit:
+        sql += f" LIMIT {limit}"
+
     with connect(db_path) as conn:
         personas_df = pd.read_sql_query(sql, conn, params=params)
 
     # persona_id keys both lookups. The response row leaves out the persona text.
     personas_df = personas_df.rename(columns={id_column: "persona_id"})
-    personas = {row["persona_id"]: row[persona_column] for _, row in personas_df.iterrows()}
+    personas = {
+        row["persona_id"]: row[persona_column] for _, row in personas_df.iterrows()
+    }
 
     persona_with_columns = {
         row["persona_id"]: row

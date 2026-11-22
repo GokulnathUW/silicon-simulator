@@ -45,20 +45,23 @@ def persist_simulation(
 
 
 def run_simulation(
-    db_path: str | Path,
+    persona_db: str | Path,
+    simulation_db: str | Path,
     simulation_name: str,
     model_name: str,
     persona_table: str,
     filters: str | list[dict[str, object]],
     selected_columns: dict[str, object],
     campaigns: list[dict[str, object]],
+    limit: int | None = None,
 ) -> None:
-    """Run a simulation from the submitted inputs."""
-    path = Path(db_path).expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Read personas from persona_db and write the simulation to simulation_db."""
+    personas_path = Path(persona_db).expanduser().resolve()
+    simulation_path = Path(simulation_db).expanduser().resolve()
+    simulation_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Persist full simulation setup
-    with connect_sqlalchemy(path) as conn:
+    with connect_sqlalchemy(simulation_path) as conn:
         transaction = None
         try:
             raw = conn.connection.driver_connection
@@ -120,7 +123,7 @@ def run_simulation(
     try:
         # Load the personas for this simulation.
         personas, responses_by_persona = fetch_personas(
-            path, persona_table, filters, selected_columns
+            personas_path, persona_table, filters, selected_columns, limit
         )
 
         # Simulate the responses for each persona for each campaign.
@@ -141,12 +144,12 @@ def run_simulation(
                     row[instruction["question_column_name"]] = value
 
         # Save the responses, then mark the simulation successful.
-        with connect(path) as conn:
+        with connect(simulation_path) as conn:
             pd.DataFrame(list(responses_by_persona.values())).to_sql(
                 simulation_name, conn, if_exists="append", index=False
             )
             persist_simulation(conn, simulation_id, simulation_name, model_name, "success")
     except Exception:
-        with connect(path) as conn:
+        with connect(simulation_path) as conn:
             persist_simulation(conn, simulation_id, simulation_name, model_name, "failure")
         raise

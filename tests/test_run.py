@@ -126,7 +126,8 @@ class TestRunSimulation:
 
     def test_persists_setup_and_answers(self, tmp_path: Path) -> None:
         """A run saves the setup, asks for every persona and campaign, and stores answers."""
-        db_path = people_db(tmp_path / "sim.db")
+        persona_db = people_db(tmp_path / "personas.db")
+        simulation_db = tmp_path / "simulations.db"
         like = {
             "id": 1,
             "question_name": "like",
@@ -208,7 +209,8 @@ class TestRunSimulation:
             ) as persist,
         ):
             run_simulation(
-                db_path,
+                persona_db,
+                simulation_db,
                 "Launch one",
                 "jev",
                 "people",
@@ -253,17 +255,18 @@ class TestRunSimulation:
         assert campaigns[1]["id"] == 2
 
         assert query(
-            db_path,
+            simulation_db,
             "SELECT simulation_id, simulation_name, model_name, status FROM simulations",
         ) == [(1, "Launch one", "jev", "success")]
         assert query(
-            db_path, "SELECT id, name, description, is_saved FROM campaigns ORDER BY id"
+            simulation_db,
+            "SELECT id, name, description, is_saved FROM campaigns ORDER BY id",
         ) == [
             (1, "Launch", "Ad A's launch", 0),
             (2, "Follow up", "Second ad", 0),
         ]
         assert query(
-            db_path,
+            simulation_db,
             """
             SELECT id, question_name, question_type, instructions, criteria, is_saved
             FROM questions
@@ -275,14 +278,14 @@ class TestRunSimulation:
             (3, "rate", "score", "Rate it", json.dumps(rate["criteria"]), 0),
         ]
         assert query(
-            db_path,
+            simulation_db,
             "SELECT simulation_id, campaign_id FROM simulation_campaigns ORDER BY campaign_id",
         ) == [
             (1, 1),
             (1, 2),
         ]
         assert query(
-            db_path,
+            simulation_db,
             "SELECT campaign_id, question_id FROM campaign_questions ORDER BY question_id",
         ) == [
             (1, 1),
@@ -290,13 +293,15 @@ class TestRunSimulation:
             (2, 3),
         ]
         assert query(
-            db_path,
+            simulation_db,
             """
             SELECT COUNT(*) FROM simulations
             WHERE created_at IS NULL OR created_at = ''
             """,
         ) == [(0,)]
-        columns = [row[1] for row in query(db_path, 'PRAGMA table_info("Launch one")')]
+        columns = [
+            row[1] for row in query(simulation_db, 'PRAGMA table_info("Launch one")')
+        ]
         assert set(columns) == {
             "persona_id",
             "age",
@@ -311,7 +316,7 @@ class TestRunSimulation:
             "camp_2_ques3",
         ]
         assert query(
-            db_path,
+            simulation_db,
             """
             SELECT persona_id, age, region, camp_1_ques1, camp_1_ques2, camp_2_ques3
             FROM "Launch one"
@@ -323,10 +328,10 @@ class TestRunSimulation:
         ]
 
     def test_reuses_saved_records_and_generates_ids_for_new_ones(
-        self, simulation_db: Path
+        self, simulation_db: Path, tmp_path: Path
     ) -> None:
         """Saved rows stay as they are. New rows get the next ids, and answers use the input question id."""
-        people_db(simulation_db, [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
         with connect(simulation_db) as conn:
             conn.execute(
                 """
@@ -388,6 +393,7 @@ class TestRunSimulation:
 
         with patch("pipeline.run.run_inference", side_effect=fake):
             run_simulation(
+                persona_db,
                 simulation_db,
                 "launch",
                 "jev",
@@ -451,7 +457,8 @@ class TestRunSimulation:
         self, tmp_path: Path
     ) -> None:
         """Text criteria stay as they are. Every other value is stored with json.dumps."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [
             {
                 "name": "Launch",
@@ -491,24 +498,38 @@ class TestRunSimulation:
             )
 
         with patch("pipeline.run.run_inference", side_effect=fake):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        assert query(db_path, "SELECT id, criteria FROM questions ORDER BY id") == [
+        assert query(
+            simulation_db, "SELECT id, criteria FROM questions ORDER BY id"
+        ) == [
             (1, '["low","high"]'),
             (2, "null"),
         ]
 
     def test_empty_campaign_list_still_saves_persona_rows(self, tmp_path: Path) -> None:
         """A simulation with no campaigns records the selected personas and does not call the model."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
 
         with patch("pipeline.run.run_inference") as inference:
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, [])
+            run_simulation(
+                persona_db, simulation_db, "launch", "jev", "people", [], SELECTED, []
+            )
 
         inference.assert_not_called()
-        assert query(db_path, "SELECT status FROM simulations") == [("success",)]
-        assert query(db_path, "SELECT COUNT(*) FROM campaigns") == [(0,)]
-        assert query(db_path, "SELECT persona_id, age, region FROM launch") == [
+        assert query(simulation_db, "SELECT status FROM simulations") == [("success",)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM campaigns") == [(0,)]
+        assert query(simulation_db, "SELECT persona_id, age, region FROM launch") == [
             (1, 30, "West")
         ]
 
@@ -517,7 +538,8 @@ class TestRunSimulation:
         tmp_path: Path,
     ) -> None:
         """Each persona is still evaluated when a campaign has no questions."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [
             {"name": "Launch", "description": "Offer", "is_saved": 0, "questions": []}
         ]
@@ -532,16 +554,26 @@ class TestRunSimulation:
             return SimpleNamespace(answers={})
 
         with patch("pipeline.run.run_inference", side_effect=fake):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
         assert seen == [[]]
-        assert query(db_path, "SELECT COUNT(*) FROM questions") == [(0,)]
-        assert query(db_path, "SELECT COUNT(*) FROM campaign_questions") == [(0,)]
-        assert query(db_path, "SELECT persona_id FROM launch") == [(1,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM questions") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM campaign_questions") == [(0,)]
+        assert query(simulation_db, "SELECT persona_id FROM launch") == [(1,)]
 
     def test_non_choice_answers_use_the_score_field(self, tmp_path: Path) -> None:
         """An answer that is neither noul nor choice is read from its score field."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [
             {
                 "name": "Launch",
@@ -564,13 +596,23 @@ class TestRunSimulation:
         )
 
         with patch("pipeline.run.run_inference", return_value=response):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        assert query(db_path, "SELECT camp_1_ques1 FROM launch") == [(2.5,)]
+        assert query(simulation_db, "SELECT camp_1_ques1 FROM launch") == [(2.5,)]
 
     def test_reusing_a_campaign_question_pair_is_rejected(self, tmp_path: Path) -> None:
         """The same campaign and question cannot be linked twice, and the first results stay."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
         first = [
             {
                 "name": "Launch",
@@ -593,22 +635,40 @@ class TestRunSimulation:
             "pipeline.run.run_inference",
             return_value=answer_response([noul_question(1)], 0.25),
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, first)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                first,
+            )
         with (
             patch("pipeline.run.run_inference") as inference,
             pytest.raises(
                 sqlalchemy.exc.IntegrityError, match="UNIQUE constraint failed"
             ),
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, second)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                second,
+            )
 
         inference.assert_not_called()
-        assert query(db_path, "SELECT simulation_id, status FROM simulations") == [
-            (1, "success")
-        ]
-        assert query(db_path, "SELECT COUNT(*) FROM campaigns") == [(1,)]
-        assert query(db_path, "SELECT COUNT(*) FROM questions") == [(1,)]
-        assert query(db_path, "SELECT persona_id, camp_1_ques1 FROM launch") == [
+        assert query(
+            simulation_db, "SELECT simulation_id, status FROM simulations"
+        ) == [(1, "success")]
+        assert query(simulation_db, "SELECT COUNT(*) FROM campaigns") == [(1,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM questions") == [(1,)]
+        assert query(simulation_db, "SELECT persona_id, camp_1_ques1 FROM launch") == [
             (1, 0.25)
         ]
 
@@ -616,7 +676,8 @@ class TestRunSimulation:
         self, tmp_path: Path
     ) -> None:
         """A new campaign id writes a new column, so appending to the same table fails."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [
             {
                 "name": "Launch",
@@ -630,7 +691,16 @@ class TestRunSimulation:
             "pipeline.run.run_inference",
             return_value=answer_response([noul_question(1)], 0.25),
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
         with (
             patch(
                 "pipeline.run.run_inference",
@@ -638,21 +708,31 @@ class TestRunSimulation:
             ),
             pytest.raises(sqlite3.OperationalError, match="no column"),
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
         assert query(
-            db_path,
+            simulation_db,
             "SELECT simulation_id, status FROM simulations ORDER BY simulation_id",
         ) == [
             (1, "success"),
             (2, "failure"),
         ]
-        assert query(db_path, "SELECT COUNT(*) FROM campaigns") == [(2,)]
-        assert query(db_path, "SELECT camp_1_ques1 FROM launch") == [(0.25,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM campaigns") == [(2,)]
+        assert query(simulation_db, "SELECT camp_1_ques1 FROM launch") == [(0.25,)]
 
     def test_inference_error_marks_the_run_failed(self, tmp_path: Path) -> None:
         """A model error is stored as a failure and raised again, with no result rows."""
-        db_path = people_db(tmp_path / "sim.db")
+        persona_db = people_db(tmp_path / "personas.db")
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [
             {
                 "name": "Launch",
@@ -677,7 +757,16 @@ class TestRunSimulation:
             patch("pipeline.run.run_inference", side_effect=fake),
             pytest.raises(RuntimeError, match="model down") as raised,
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
         assert raised.value is error
         assert [call.args[4] for call in persist.call_args_list] == [
@@ -685,10 +774,10 @@ class TestRunSimulation:
             "failure",
         ]
         assert calls["count"] == 2
-        assert query(db_path, "SELECT status FROM simulations") == [("failure",)]
+        assert query(simulation_db, "SELECT status FROM simulations") == [("failure",)]
         assert (
             query(
-                db_path,
+                simulation_db,
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'launch'",
             )
             == []
@@ -696,7 +785,8 @@ class TestRunSimulation:
 
     def test_missing_answer_marks_the_run_failed(self, tmp_path: Path) -> None:
         """A response that omits a question name fails the run."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [
             {
                 "name": "Launch",
@@ -712,13 +802,23 @@ class TestRunSimulation:
             ),
             pytest.raises(KeyError),
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        assert query(db_path, "SELECT status FROM simulations") == [("failure",)]
+        assert query(simulation_db, "SELECT status FROM simulations") == [("failure",)]
 
     def test_blank_noul_criterion_marks_the_run_failed(self, tmp_path: Path) -> None:
         """The saved criteria keep the blank label, and the run fails when it is removed for the model."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
         criteria = {"true": "yes", "false": ""}
         campaigns = [
             {
@@ -739,10 +839,19 @@ class TestRunSimulation:
         ]
 
         with pytest.raises(KeyError, match="false"):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        assert query(db_path, "SELECT status FROM simulations") == [("failure",)]
-        assert query(db_path, "SELECT criteria FROM questions") == [
+        assert query(simulation_db, "SELECT status FROM simulations") == [("failure",)]
+        assert query(simulation_db, "SELECT criteria FROM questions") == [
             (json.dumps(criteria),)
         ]
 
@@ -753,7 +862,8 @@ class TestRunSimulation:
     ) -> None:
         """A new nested database is created, and a missing persona table fails the run."""
         monkeypatch.chdir(tmp_path)
-        db_path = Path("nested") / "sim.db"
+        persona_db = Path("nested") / "personas.db"
+        simulation_db = Path("nested") / "simulations.db"
         campaigns = [
             {
                 "name": "Launch",
@@ -764,9 +874,18 @@ class TestRunSimulation:
         ]
 
         with pytest.raises(ValueError, match="Table people does not exist"):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        created = tmp_path / db_path
+        created = tmp_path / simulation_db
         assert created.is_file()
         assert query(
             created, "SELECT simulation_name, model_name, status FROM simulations"
@@ -775,7 +894,8 @@ class TestRunSimulation:
 
     def test_empty_population_marks_the_run_failed(self, tmp_path: Path) -> None:
         """No matching personas cannot be written as a table with no columns."""
-        db_path = people_db(tmp_path / "sim.db")
+        persona_db = people_db(tmp_path / "personas.db")
+        simulation_db = tmp_path / "simulations.db"
         filters = [{"columns": "region", "type": "single_select", "values": "North"}]
         campaigns = [
             {
@@ -791,14 +911,21 @@ class TestRunSimulation:
             pytest.raises(sqlite3.OperationalError, match="syntax error"),
         ):
             run_simulation(
-                db_path, "launch", "jev", "people", filters, SELECTED, campaigns
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                filters,
+                SELECTED,
+                campaigns,
             )
 
         inference.assert_not_called()
-        assert query(db_path, "SELECT status FROM simulations") == [("failure",)]
+        assert query(simulation_db, "SELECT status FROM simulations") == [("failure",)]
         assert (
             query(
-                db_path,
+                simulation_db,
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'launch'",
             )
             == []
@@ -806,24 +933,35 @@ class TestRunSimulation:
 
     def test_setup_error_rolls_back_the_simulation(self, tmp_path: Path) -> None:
         """A bad campaign leaves no simulation, campaign, or question rows."""
-        db_path = tmp_path / "sim.db"
+        persona_db = tmp_path / "personas.db"
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [{"description": "Offer", "is_saved": 0, "questions": []}]
 
         with (
             patch("pipeline.run.run_inference") as inference,
             pytest.raises(KeyError, match="name"),
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
         inference.assert_not_called()
-        assert query(db_path, "SELECT COUNT(*) FROM simulations") == [(0,)]
-        assert query(db_path, "SELECT COUNT(*) FROM campaigns") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM simulations") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM campaigns") == [(0,)]
 
     def test_question_setup_error_rolls_back_inserted_campaigns(
         self, tmp_path: Path
     ) -> None:
         """A later setup error removes campaign rows written earlier in the transaction."""
-        db_path = tmp_path / "sim.db"
+        persona_db = tmp_path / "personas.db"
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [
             {
                 "name": "Launch",
@@ -834,16 +972,26 @@ class TestRunSimulation:
         ]
 
         with pytest.raises(KeyError):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        assert query(db_path, "SELECT COUNT(*) FROM simulations") == [(0,)]
-        assert query(db_path, "SELECT COUNT(*) FROM campaigns") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM simulations") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM campaigns") == [(0,)]
 
     def test_campaign_saved_flag_outside_zero_and_one_rolls_back(
         self, tmp_path: Path
     ) -> None:
         """A campaign saved flag other than 0 or 1 is rejected and nothing is kept."""
-        db_path = tmp_path / "sim.db"
+        persona_db = tmp_path / "personas.db"
+        simulation_db = tmp_path / "simulations.db"
         campaigns = [
             {
                 "name": "Launch",
@@ -856,16 +1004,26 @@ class TestRunSimulation:
         with pytest.raises(
             sqlalchemy.exc.IntegrityError, match="CHECK constraint failed"
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        assert query(db_path, "SELECT COUNT(*) FROM simulations") == [(0,)]
-        assert query(db_path, "SELECT COUNT(*) FROM campaigns") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM simulations") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM campaigns") == [(0,)]
 
     def test_question_saved_flag_outside_zero_and_one_rolls_back(
         self, tmp_path: Path
     ) -> None:
         """A question that is neither saved nor unsaved is not inserted, so the link fails."""
-        db_path = tmp_path / "sim.db"
+        persona_db = tmp_path / "personas.db"
+        simulation_db = tmp_path / "simulations.db"
         question = noul_question(1)
         question["is_saved"] = 2
         campaigns = [
@@ -880,17 +1038,27 @@ class TestRunSimulation:
         with pytest.raises(
             sqlalchemy.exc.IntegrityError, match="FOREIGN KEY constraint failed"
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        assert query(db_path, "SELECT COUNT(*) FROM simulations") == [(0,)]
-        assert query(db_path, "SELECT COUNT(*) FROM campaigns") == [(0,)]
-        assert query(db_path, "SELECT COUNT(*) FROM questions") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM simulations") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM campaigns") == [(0,)]
+        assert query(simulation_db, "SELECT COUNT(*) FROM questions") == [(0,)]
 
     def test_saved_question_must_already_exist(self, tmp_path: Path) -> None:
         """A saved question id that is not in the database fails the link and rolls back."""
-        db_path = people_db(tmp_path / "sim.db", [(1, "alpha", 30, "West")])
-        apply_simulation_schema(db_path)
-        with connect(db_path) as conn:
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
+        apply_simulation_schema(simulation_db)
+        with connect(simulation_db) as conn:
             conn.execute(
                 """
                 INSERT INTO campaigns (id, name, description, is_saved)
@@ -910,7 +1078,16 @@ class TestRunSimulation:
         with pytest.raises(
             sqlalchemy.exc.IntegrityError, match="FOREIGN KEY constraint failed"
         ):
-            run_simulation(db_path, "launch", "jev", "people", [], SELECTED, campaigns)
+            run_simulation(
+                persona_db,
+                simulation_db,
+                "launch",
+                "jev",
+                "people",
+                [],
+                SELECTED,
+                campaigns,
+            )
 
-        assert query(db_path, "SELECT COUNT(*) FROM simulations") == [(0,)]
-        assert query(db_path, "SELECT id, name FROM campaigns") == [(1, "Saved")]
+        assert query(simulation_db, "SELECT COUNT(*) FROM simulations") == [(0,)]
+        assert query(simulation_db, "SELECT id, name FROM campaigns") == [(1, "Saved")]

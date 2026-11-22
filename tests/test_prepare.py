@@ -98,6 +98,50 @@ class TestFetchPersonas:
         assert list(personas) == [1, 2, 3, 4, 5]
         assert list(rows) == [1, 2, 3, 4, 5]
 
+    def test_limit_returns_the_first_rows(self, people_db: Path) -> None:
+        """A limit keeps that many rows from the start of the query."""
+        personas, rows = fetch_personas(
+            people_db, "people", [], selected_columns(), limit=2
+        )
+
+        assert list(personas) == [1, 2]
+        assert list(rows) == [1, 2]
+
+    def test_limit_applies_after_filters(self, people_db: Path) -> None:
+        """Filters run first, then the limit keeps the first matches."""
+        personas, _ = fetch_personas(
+            people_db,
+            "people",
+            [{"columns": "region", "type": "single_select", "values": "West"}],
+            selected_columns(),
+            limit=2,
+        )
+
+        assert list(personas) == [1, 3]
+
+    def test_limit_zero_returns_no_rows(self, people_db: Path) -> None:
+        """A limit of zero returns no personas."""
+        personas, rows = fetch_personas(
+            people_db, "people", [], selected_columns(), limit=0
+        )
+
+        assert personas == {}
+        assert rows == {}
+
+    @pytest.mark.parametrize("limit", [-1, True, 1.5])
+    def test_limit_must_be_a_non_negative_integer(
+        self, people_db: Path, limit: object
+    ) -> None:
+        """A negative or non-integer limit is rejected."""
+        with pytest.raises(ValueError, match="limit must be a non-negative integer"):
+            fetch_personas(
+                people_db,
+                "people",
+                [],
+                selected_columns(),
+                limit=limit,  # type: ignore[arg-type]
+            )
+
     def test_empty_table_returns_empty_mappings(self, tmp_path: Path) -> None:
         """A table with no rows produces two empty mappings."""
         db_path = tmp_path / "people.db"
