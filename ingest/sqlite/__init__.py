@@ -1,11 +1,12 @@
-"""Open the Twin-2K-500 SQLite database and change its tables."""
-
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema.sql"
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Connection
+
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "sql" / "schema.sql"
 
 
 @contextmanager
@@ -27,6 +28,26 @@ def connect(db_path: str | Path) -> Iterator[sqlite3.Connection]:
         conn.commit()
     finally:
         conn.close()
+
+
+@contextmanager
+def connect_sqlalchemy(db_path: str | Path) -> Iterator[Connection]:
+    """Open a SQLAlchemy connection to the sqlite file with foreign keys enabled"""
+    path = Path(db_path).expanduser().resolve()
+    engine = create_engine(f"sqlite:///{path}")
+    event.listen(
+        engine,
+        "connect",
+        lambda dbapi_connection, _record: dbapi_connection.execute(
+            "PRAGMA foreign_keys = ON"
+        ),
+    )
+    conn = engine.connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+        engine.dispose()
 
 
 def table_exists(db_path: Path, table: str) -> bool:
@@ -56,7 +77,6 @@ def write_rows_to_table(
     *,
     replace: bool,
 ) -> None:
-    """Insert rows into table. Deletes existing rows first when replace is true."""
     placeholders = ", ".join("?" * len(columns))
     sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"
     with connect(db_path) as conn:
