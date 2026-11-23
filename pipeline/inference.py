@@ -9,6 +9,8 @@ from typesafe_sdk import (
     TypeSafeClient,
 )
 
+from config import load_env
+
 _client: TypeSafeClient | None = None
 
 
@@ -16,6 +18,7 @@ def get_client() -> TypeSafeClient:
     """Return the shared client, creating it the first time it is needed."""
     global _client
     if _client is None:
+        load_env()
         _client = TypeSafeClient()
     return _client
 

@@ -13,11 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from config import setting_path
 from questions.ad import ADS, REACTIONS
 from questions.choice import CHOICE_QUESTIONS
 from questions.yes_no import YES_NO_QUESTIONS
 
-DEFAULT_DB = ROOT / "data" / "demo_questions.db"
 SCHEMA_PATH = ROOT / "sql" / "demo_questions.sql"
 
 
@@ -99,7 +99,8 @@ def load_questions(db_path: Path) -> None:
 
 
 def main() -> None:
-    """Load the scenarios into data/questions.db, or into a path you pass."""
+    """Load the scenarios into the questions database, or into a path you pass."""
+    questions_db = setting_path("QUESTIONS_DB")
     parser = argparse.ArgumentParser(
         description="Load scenarios into a SQLite database."
     )
@@ -107,8 +108,8 @@ def main() -> None:
         "db_path",
         nargs="?",
         type=Path,
-        default=DEFAULT_DB,
-        help="SQLite file to create or replace (default: data/demo_questions.db)",
+        default=questions_db,
+        help=f"SQLite file to create or replace (default: {questions_db})",
     )
     args = parser.parse_args()
     load_questions(args.db_path)

@@ -136,11 +136,11 @@ def run_simulation(
                 for instruction in instructions:
                     answer = simulated_responses.answers[instruction["question_name"]]
                     if answer.type == "noul":
-                        value = answer.noul
+                        value = answer.noul # value is probability of true
                     elif answer.type == "choice":
-                        value = answer.choice
+                        value = answer.choice # value is the chosen answer
                     else:
-                        value = answer.score
+                        value = answer.score # value is the weighted score of the reaction (sum(score * p(score)))
                     row[instruction["question_column_name"]] = value
 
         # Save the responses, then mark the simulation successful.

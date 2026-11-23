@@ -8,6 +8,7 @@ dependencies = [
     "huggingface-hub>=1",
     "openai>=1.78.1,<2",
     "pandas>=2.2.2,<3",
+    "python-dotenv>=1.2.4",
     "sqlalchemy>=2.1.9",
     "typesafe-sdk>=0.7.5",
 ]
