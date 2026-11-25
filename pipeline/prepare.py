@@ -65,7 +65,9 @@ def fetch_personas(
     if clauses:
         sql = f"{sql} WHERE {' AND '.join(clauses)}"
 
-    # Cap how many personas are returned.
+    sql += f' ORDER BY "{id_column}"'
+
+    # Limit the number of personas returned.
     if limit:
         sql += f" LIMIT {limit}"
 
