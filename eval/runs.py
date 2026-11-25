@@ -4,11 +4,13 @@ import re
 from pathlib import Path
 
 import pandas as pd
+from tqdm import tqdm
 
 from config import setting_path
 from ingest.sqlite import connect
 from pipeline.inference import run_inference
 from pipeline.prepare import create_instructions, create_state, fetch_personas
+from pipeline.run import parse_model_response
 
 ROOT = Path(__file__).resolve().parents[1]
 EVAL_TABLES = ROOT / "sql" / "eval_tables.sql"
@@ -207,67 +209,78 @@ def run_eval(
     predictions: list[dict[str, object]] = []
     accuracies: list[float] = []
 
-    for _, persona in personas.iterrows():
+    print(f"Model: {model_name}", flush=True)
+    print(f"Experiment: {table_name}", flush=True)
+    pairs = [
+        (persona, question)
+        for _, persona in personas.iterrows()
+        for question in questions
+    ]
+    for persona, question in tqdm(pairs, desc=table_name):
         persona_id = str(persona["persona_id"])
         persona_text = str(persona[persona_column])
+        item_id = str(question["item_id"])
 
-        for question in questions:
-            item_id = str(question["item_id"])
-
-            # Prepare input
-            state = create_state(persona_text, str(question["campaign"]))
-            instructions = create_instructions(
-                0,
-                [
-                    {
-                        "id": 0,
-                        "question_name": item_id,
-                        "question_type": question["question_type"],
-                        "instructions": question["instructions"],
-                        "criteria": question["criteria"],
-                    }
-                ],
-            )
-
-            # Run inference
-            response = run_inference(model_name, instructions, state)
-            answer = response.answers[item_id]
-
-            # Process the prediction and its accuracy.
-            options = [str(option) for option in question["criteria"]]
-            question_type = str(question["question_type"])
-            predicted = answer.score if question_type == "score" else answer.choice
-            row_accuracy = calculate_accuracy(
-                predicted,
-                label_by_item.get((persona_id, item_id)),
-                options,
-                question_type,
-            )
-            if row_accuracy is not None:
-                accuracies.append(row_accuracy)
-
-            # Store the prediction
-            predictions.append(
+        # Prepare input
+        state = create_state(persona_text, str(question["campaign"]))
+        instructions = create_instructions(
+            0,
+            [
                 {
-                    "persona_id": persona_id,
-                    "item_id": item_id,
-                    "predicted": predicted,
-                    "probabilities": json.dumps(
-                        {
-                            str(level): value
-                            for level, value in answer.probabilities.items()
-                        }
-                    ),
+                    "id": 0,
+                    "question_name": item_id,
+                    "question_type": question["question_type"],
+                    "instructions": question["instructions"],
+                    "criteria": question["criteria"],
                 }
+            ],
+        )
+
+        # Run inference
+        response = run_inference(model_name, instructions, state)
+        answer = response.answers[item_id]
+
+        # Process the prediction and its accuracy.
+        options = [str(option) for option in question["criteria"]]
+        question_type = str(question["question_type"])
+        predicted, reason = parse_model_response(model_name, answer)
+        if model_name.startswith("gpt"):
+            probabilities = None
+            accuracy_type = "choice"
+        else:
+            probabilities = json.dumps(
+                {str(level): value for level, value in answer.probabilities.items()}
             )
-            results.append(
-                {"persona_id": persona_id, "item_id": item_id, "response": response}
-            )
+            accuracy_type = question_type
+
+        # Calculate accuracy
+        row_accuracy = calculate_accuracy(
+            predicted,
+            label_by_item.get((persona_id, item_id)),
+            options,
+            accuracy_type,
+        )
+        if row_accuracy is not None:
+            accuracies.append(row_accuracy)
+
+        # Store the prediction
+        predictions.append(
+            {
+                "persona_id": persona_id,
+                "item_id": item_id,
+                "predicted": predicted,
+                "reason": reason,
+                "probabilities": probabilities,
+            }
+        )
+        results.append(
+            {"persona_id": persona_id, "item_id": item_id, "response": response}
+        )
 
     # Store the results
     frame = pd.DataFrame(
         predictions,
-        columns=["persona_id", "item_id", "predicted", "probabilities"],
+        columns=["persona_id", "item_id", "predicted", "reason", "probabilities"],
     )
     frame = frame.merge(people, on="persona_id", how="left").merge(
         labels, on=["persona_id", "item_id"], how="left"

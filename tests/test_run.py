@@ -10,8 +10,10 @@ import pytest
 import sqlalchemy.exc
 
 from ingest.sqlite import connect
+from pipeline import inference
+from pipeline.inference import OpenAIQuestionResponse
 from pipeline.prepare import create_instructions
-from pipeline.run import persist_simulation, run_simulation
+from pipeline.run import parse_model_response, persist_simulation, run_simulation
 from tests.helpers import apply_simulation_schema, query, write_table
 
 SELECTED = {
@@ -73,6 +75,31 @@ def answer_response(
     return SimpleNamespace(answers=answers)
 
 
+class TestParseModelResponse:
+    """Tests for parse_model_response."""
+
+    def test_typesafe_uses_the_field_for_the_answer_type(self) -> None:
+        """A typesafe answer stores noul, choice, or score."""
+        assert parse_model_response("jev", SimpleNamespace(type="noul", noul=0.4)) == (
+            0.4,
+            None,
+        )
+        assert parse_model_response(
+            "jev", SimpleNamespace(type="choice", choice="A")
+        ) == ("A", None)
+        assert parse_model_response(
+            "jev", SimpleNamespace(type="score", score=2.5)
+        ) == (2.5, None)
+
+    def test_openai_stores_the_choice_and_reason(self) -> None:
+        """A ChatGPT answer stores the choice and the reason."""
+        answer = SimpleNamespace(choice="yes", reason="The tone fits.")
+        assert parse_model_response("openai-test", answer) == (
+            "yes",
+            "The tone fits.",
+        )
+
+
 class TestPersistSimulation:
     """Tests for persist_simulation."""
 
@@ -123,6 +150,49 @@ class TestPersistSimulation:
 
 class TestRunSimulation:
     """Tests for run_simulation."""
+
+    def test_chatgpt_run_stores_choice_and_reason(self, tmp_path: Path) -> None:
+        """A ChatGPT run stores each question's choice and reason."""
+        persona_db = people_db(tmp_path / "personas.db", [(1, "alpha", 30, "West")])
+        simulation_db = tmp_path / "simulations.db"
+        campaign = {
+            "name": "Launch",
+            "description": "Ad A's launch",
+            "is_saved": 0,
+            "questions": [noul_question(1)],
+        }
+        raw = SimpleNamespace(
+            usage_metadata={"input_tokens": 5, "output_tokens": 2},
+            response_metadata={"model_name": "chatgpt-test"},
+        )
+        inference._chatgpt_model = None
+        with patch("pipeline.inference.ChatOpenAI") as chat:
+            chat.return_value.with_structured_output.return_value.invoke.return_value = {
+                "raw": raw,
+                "parsed": OpenAIQuestionResponse(choice="yes", reason="The tone fits."),
+                "parsing_error": None,
+            }
+            try:
+                run_simulation(
+                    persona_db,
+                    simulation_db,
+                    "launch",
+                    "openai-test",
+                    "people",
+                    [],
+                    SELECTED,
+                    [campaign],
+                )
+            finally:
+                inference._chatgpt_model = None
+
+        assert query(simulation_db, "SELECT model_name, status FROM simulations") == [
+            ("openai-test", "success")
+        ]
+        assert query(
+            simulation_db,
+            "SELECT persona_id, camp_1_ques1, camp_1_ques1_reason FROM launch",
+        ) == [(1, "yes", "The tone fits.")]
 
     def test_persists_setup_and_answers(self, tmp_path: Path) -> None:
         """A run saves the setup, asks for every persona and campaign, and stores answers."""
@@ -307,13 +377,19 @@ class TestRunSimulation:
             "age",
             "region",
             "camp_1_ques1",
+            "camp_1_ques1_reason",
             "camp_1_ques2",
+            "camp_1_ques2_reason",
             "camp_2_ques3",
+            "camp_2_ques3_reason",
         }
         assert [column for column in columns if str(column).startswith("camp_")] == [
             "camp_1_ques1",
+            "camp_1_ques1_reason",
             "camp_1_ques2",
+            "camp_1_ques2_reason",
             "camp_2_ques3",
+            "camp_2_ques3_reason",
         ]
         assert query(
             simulation_db,
@@ -443,11 +519,15 @@ class TestRunSimulation:
             "age",
             "region",
             "camp_5_ques100",
+            "camp_5_ques100_reason",
             "camp_4_ques9",
+            "camp_4_ques9_reason",
         }
         assert [column for column in columns if str(column).startswith("camp_")] == [
             "camp_5_ques100",
+            "camp_5_ques100_reason",
             "camp_4_ques9",
+            "camp_4_ques9_reason",
         ]
         assert query(
             simulation_db, "SELECT camp_5_ques100, camp_4_ques9 FROM launch"

@@ -1,6 +1,12 @@
-"""Tests for eval question sampling."""
+"""Tests for eval question sampling and stored predictions."""
 
-from eval.runs import SAMPLE_SEED, sample_questions
+from pathlib import Path
+from types import SimpleNamespace
+
+import pandas as pd
+
+from eval.runs import SAMPLE_SEED, run_eval, sample_questions
+from tests.helpers import query
 
 
 class TestSampleQuestions:
@@ -36,3 +42,76 @@ class TestSampleQuestions:
             len([question for question in chosen if question["question_id"] == "B"])
             == 2
         )
+
+
+class TestRunEval:
+    """Tests for how eval stores a model answer."""
+
+    def test_openai_stores_choice_and_reason(self, tmp_path: Path, monkeypatch) -> None:
+        """An OpenAI answer stores the choice and reason, with no probabilities."""
+        personas = pd.DataFrame([{"persona_id": "1", "persona": "alpha"}])
+        questions = [
+            {
+                "item_id": "q1",
+                "question_type": "score",
+                "campaign": "Wave",
+                "instructions": "How much do you agree?",
+                "criteria": ["low", "high"],
+            }
+        ]
+        labels = pd.DataFrame(
+            [{"persona_id": "1", "item_id": "q1", "actual_label": "high"}]
+        )
+        answer = SimpleNamespace(choice="high", reason="The tone fits.")
+        monkeypatch.setattr(
+            "eval.runs.run_inference",
+            lambda model_name, instructions, state: SimpleNamespace(
+                answers={"q1": answer}
+            ),
+        )
+        monkeypatch.setattr("eval.runs.setting_path", lambda name: tmp_path / "eval.db")
+
+        run_eval(personas, questions, "openai_check", "persona", "gpt-test", labels)
+
+        assert query(
+            tmp_path / "eval.db",
+            "SELECT persona_id, predicted, reason, probabilities FROM eval_openai_check",
+        ) == [("1", "high", "The tone fits.", None)]
+
+    def test_typesafe_stores_score_and_probabilities(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A typesafe score answer stores the score and its probabilities."""
+        personas = pd.DataFrame([{"persona_id": "1", "persona": "alpha"}])
+        questions = [
+            {
+                "item_id": "q1",
+                "question_type": "score",
+                "campaign": "Wave",
+                "instructions": "How much do you agree?",
+                "criteria": ["low", "high"],
+            }
+        ]
+        labels = pd.DataFrame(
+            [{"persona_id": "1", "item_id": "q1", "actual_label": "high"}]
+        )
+        answer = SimpleNamespace(
+            type="score",
+            score=1.0,
+            choice="low",
+            probabilities={"low": 0.2, "high": 0.8},
+        )
+        monkeypatch.setattr(
+            "eval.runs.run_inference",
+            lambda model_name, instructions, state: SimpleNamespace(
+                answers={"q1": answer}
+            ),
+        )
+        monkeypatch.setattr("eval.runs.setting_path", lambda name: tmp_path / "eval.db")
+
+        run_eval(personas, questions, "jev_check", "persona", "jev-latest", labels)
+
+        assert query(
+            tmp_path / "eval.db",
+            "SELECT persona_id, predicted, reason, probabilities FROM eval_jev_check",
+        ) == [("1", 1.0, "Jev does not provide reasons", '{"low": 0.2, "high": 0.8}')]

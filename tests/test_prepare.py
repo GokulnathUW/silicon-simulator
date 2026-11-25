@@ -1080,7 +1080,8 @@ class TestCreateInstructions:
                 "question_type": "noul",
                 "question_column_name": "camp_2_ques4",
                 "instructions": {
-                    "question": f"{SYSTEM_PROMPT}\nDo you like it?",
+                    "system_prompt": SYSTEM_PROMPT,
+                    "question": "Do you like it?",
                     "focus": "tone",
                     "inspect": "`campaign`",
                 },
@@ -1092,7 +1093,8 @@ class TestCreateInstructions:
                 "question_type": "score",
                 "question_column_name": "camp_2_ques5",
                 "instructions": {
-                    "question": f"{SYSTEM_PROMPT}\nRate it",
+                    "system_prompt": SYSTEM_PROMPT,
+                    "question": "Rate it",
                     "inspect": "`campaign`",
                 },
                 "criteria": ["low", ""],
@@ -1192,8 +1194,8 @@ class TestCreateInstructions:
         assert prepared[1]["id"] == 0
         assert prepared[1]["question_column_name"] == "camp_1_ques0"
 
-    def test_none_instructions_are_stringified(self) -> None:
-        """A missing instruction is still placed after the system prompt."""
+    def test_none_instructions_are_omitted(self) -> None:
+        """A missing question is dropped. The system prompt stays on its own key."""
         question = {
             "id": 1,
             "question_name": "q",
@@ -1204,7 +1206,8 @@ class TestCreateInstructions:
 
         prepared = create_instructions(1, [question])
 
-        assert prepared[0]["instructions"]["question"] == f"{SYSTEM_PROMPT}\nNone"
+        assert "question" not in prepared[0]["instructions"]
+        assert prepared[0]["instructions"]["system_prompt"] == SYSTEM_PROMPT
 
     def test_blank_instructions_keep_the_system_prompt(self) -> None:
         """The system prompt remains even when the question text is blank."""
@@ -1218,7 +1221,8 @@ class TestCreateInstructions:
 
         prepared = create_instructions(1, [question])
 
-        assert prepared[0]["instructions"]["question"] == f"{SYSTEM_PROMPT}\n"
+        assert "question" not in prepared[0]["instructions"]
+        assert prepared[0]["instructions"]["system_prompt"] == SYSTEM_PROMPT
         assert prepared[0]["instructions"]["inspect"] == "`campaign`"
 
     def test_instruction_dicts_are_independent(self) -> None:

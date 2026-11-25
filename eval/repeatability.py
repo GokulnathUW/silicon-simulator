@@ -108,7 +108,7 @@ def run_repeatability(
         run_eval(
             personas,
             questions,
-            f"repeatability_{repeat}",
+            f"{model_name}_repeatability_{repeat}",
             "persona",
             model_name,
             label_frame,

@@ -173,7 +173,7 @@ def run_ablation(
         run_eval(
             personas,
             questions,
-            f"ablation_{style}",
+            f"{model_name}_ablation_{style}",
             "persona",
             model_name,
             label_frame,

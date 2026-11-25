@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -42,6 +43,29 @@ def persist_simulation(
             "UPDATE simulations SET status = ? WHERE simulation_id = ?",
             (status, simulation_id),
         )
+
+
+def parse_typesafe_response(answer: Any) -> tuple[Any, None]:
+    """Return the stored value from a typesafe answer."""
+    if answer.type == "noul":
+        value = answer.noul # value is probability of true
+    if answer.type == "choice":
+        value = answer.choice # value is the chosen answer
+    if answer.type == "score":
+        value = answer.score # value is the weighted score of the reaction
+    return value, "Jev does not provide reasons"
+
+
+def parse_openai_response(answer: Any) -> tuple[str, str]:
+    """Return the stored choice and reason from a ChatGPT answer."""
+    return answer.choice, answer.reason
+
+
+def parse_model_response(model_name: str, answer: Any) -> tuple[Any, str | None]:
+    """Return the value and reason to store for one model answer."""
+    if model_name.startswith("gpt"):
+        return parse_openai_response(answer)
+    return parse_typesafe_response(answer)
 
 
 def run_simulation(
@@ -135,13 +159,9 @@ def run_simulation(
                 row = responses_by_persona[persona_id]
                 for instruction in instructions:
                     answer = simulated_responses.answers[instruction["question_name"]]
-                    if answer.type == "noul":
-                        value = answer.noul # value is probability of true
-                    elif answer.type == "choice":
-                        value = answer.choice # value is the chosen answer
-                    else:
-                        value = answer.score # value is the weighted score of the reaction (sum(score * p(score)))
+                    value, reason = parse_model_response(model_name, answer)
                     row[instruction["question_column_name"]] = value
+                    row[instruction["question_column_name"] + "_reason"] = reason
 
         # Save the responses, then mark the simulation successful.
         with connect(simulation_path) as conn:

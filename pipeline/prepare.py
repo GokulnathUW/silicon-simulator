@@ -187,7 +187,8 @@ def create_instructions(
                     "question_type": question["question_type"],
                     "question_column_name": f"camp_{campaign_id}_ques{question['id']}",  # simulation result table uses this as column name
                     "instructions": {
-                        "question": f"{SYSTEM_PROMPT}\n{question['instructions']}",
+                        "system_prompt": SYSTEM_PROMPT,
+                        "question": question["instructions"],
                         "focus": question.get("focus"),
                         "inspect": "`campaign`",
                     },

@@ -1,7 +1,9 @@
 """Unit tests for model inference."""
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,21 +11,25 @@ from pydantic import ValidationError
 from typesafe_sdk import Choice, Noul, Score
 
 from pipeline import inference
-from pipeline.inference import run_inference
+from pipeline.inference import run_chatgpt_inference, run_inference
 from pipeline.prepare import create_instructions
+from prompts.system_prompt import SYSTEM_PROMPT
 
 
 def instruction(
     name: object,
     question_type: object,
-    prompt: object,
+    question: object,
     criteria: object,
 ) -> dict[str, object]:
     """Return one inference instruction."""
     return {
         "question_name": name,
         "question_type": question_type,
-        "instructions": prompt,
+        "instructions": {
+            "system_prompt": SYSTEM_PROMPT,
+            "question": question,
+        },
         "criteria": criteria,
     }
 
@@ -51,7 +57,7 @@ class TestRunInference:
             instruction(
                 "like",
                 "Noul",
-                {"question": "Do you?"},
+                "Do you?",
                 {"true": "yes", "false": "no", "maybe": "skip"},
             ),
             instruction("pick", "Choice", "Which one?", {"A": "first", "B": "second"}),
@@ -69,13 +75,19 @@ class TestRunInference:
         questions = client.system_one.call_args.kwargs["questions"]
         assert list(questions) == ["like", "pick", "rate"]
         assert isinstance(questions["like"], Noul)
-        assert questions["like"].instructions == {"question": "Do you?"}
+        assert questions["like"].instructions == {
+            "question": f"{SYSTEM_PROMPT}\nDo you?"
+        }
         assert questions["like"].criteria == {"true": "yes", "false": "no"}
         assert isinstance(questions["pick"], Choice)
-        assert questions["pick"].instructions == "Which one?"
+        assert questions["pick"].instructions == {
+            "question": f"{SYSTEM_PROMPT}\nWhich one?"
+        }
         assert questions["pick"].criteria == {"A": "first", "B": "second"}
         assert isinstance(questions["rate"], Score)
-        assert questions["rate"].instructions == "Rate it"
+        assert questions["rate"].instructions == {
+            "question": f"{SYSTEM_PROMPT}\nRate it"
+        }
         assert list(questions["rate"].criteria) == ["low", "high"]
 
     @pytest.mark.parametrize(
@@ -103,7 +115,7 @@ class TestRunInference:
 
         question = client.system_one.call_args.kwargs["questions"]["q"]
         assert isinstance(question, Choice)
-        assert question.instructions == "second"
+        assert question.instructions == {"question": f"{SYSTEM_PROMPT}\nsecond"}
 
     def test_question_name_is_stringified(self) -> None:
         """Numeric names are used as text keys."""
@@ -133,6 +145,11 @@ class TestRunInference:
             assert inference.TypeSafeClient.call_count == 1
 
         assert client.system_one.call_count == 2
+        sent = [
+            call.kwargs["questions"]["q"].instructions
+            for call in client.system_one.call_args_list
+        ]
+        assert sent[0] == sent[1] == {"question": f"{SYSTEM_PROMPT}\nWhich one?"}
 
     def test_client_errors_propagate(self) -> None:
         """A client failure is raised."""
@@ -214,7 +231,13 @@ class TestRunInference:
         assert isinstance(built["like"], Noul)
         assert isinstance(built["pick"], Choice)
         assert isinstance(built["rate"], Score)
-        assert built["like"].instructions == prepared[0]["instructions"]
+        assert built["like"].instructions == {
+            "question": f"{SYSTEM_PROMPT}\nDo you like it?",
+            "focus": "tone",
+            "inspect": "`campaign`",
+        }
+        assert prepared[0]["instructions"]["system_prompt"] == SYSTEM_PROMPT
+        assert prepared[0]["instructions"]["question"] == "Do you like it?"
         assert built["like"].criteria == prepared[0]["criteria"]
         assert built["pick"].criteria == prepared[1]["criteria"]
         assert list(built["rate"].criteria) == prepared[2]["criteria"]
@@ -240,3 +263,114 @@ class TestRunInference:
             run_inference("jev", prepared, {"persona": "alpha", "campaign": "launch"})
 
         client.system_one.assert_not_called()
+
+
+def test_chatgpt_inference_calls_once_per_question() -> None:
+    """Each question is one ChatGPT call, and the model is created once."""
+    instructions = [
+        {
+            "question_name": "like",
+            "question_type": "noul",
+            "instructions": {
+                "system_prompt": SYSTEM_PROMPT,
+                "question": "Do you like it?",
+                "inspect": "`campaign`",
+            },
+            "criteria": {"true": "yes", "false": "no"},
+        },
+        {
+            "question_name": "pick",
+            "question_type": "choice",
+            "instructions": {"question": "Which ad?"},
+            "criteria": ["first", "second"],
+        },
+    ]
+    state = {"persona": "alpha", "campaign": "launch"}
+    original = json.loads(json.dumps(instructions))
+    raw = SimpleNamespace(
+        usage_metadata={"input_tokens": 11, "output_tokens": 3},
+        response_metadata={"model_name": "chatgpt-test"},
+    )
+    inference._chatgpt_models.clear()
+    with patch("pipeline.inference.ChatOpenAI") as chat_cls:
+        structured = chat_cls.return_value.with_structured_output.return_value
+        structured.invoke.side_effect = [
+            {
+                "raw": raw,
+                "parsed": inference._Answer(choice="yes", reason="The tone fits."),
+                "parsing_error": None,
+            },
+            {
+                "raw": raw,
+                "parsed": inference._Answer(choice="first", reason="It is familiar."),
+                "parsing_error": None,
+            },
+        ]
+        try:
+            result = run_chatgpt_inference("chatgpt-test", instructions, state)
+        finally:
+            inference._chatgpt_models.clear()
+
+    assert chat_cls.call_count == 1
+    assert result.model == "chatgpt-test"
+    assert result.usage.input_tokens == 22
+    assert result.usage.output_tokens == 6
+    assert result.answers["like"].choice == "yes"
+    assert result.answers["like"].reason == "The tone fits."
+    assert result.answers["pick"].choice == "first"
+    assert chat_cls.call_args.kwargs == {
+        "model": "chatgpt-test",
+        "use_responses_api": True,
+    }
+    schema_call = chat_cls.return_value.with_structured_output.call_args
+    assert schema_call.args == (inference._Answer,)
+    assert schema_call.kwargs == {"include_raw": True}
+    assert structured.invoke.call_count == 2
+    first_system, first_user = structured.invoke.call_args_list[0].args[0]
+    second_system, second_user = structured.invoke.call_args_list[1].args[0]
+    assert first_system.content == second_system.content == SYSTEM_PROMPT
+    assert first_user.content == (
+        "Persona:\nalpha\n\n"
+        "Campaign:\nlaunch\n\n"
+        "Question:\nDo you like it?\n\n"
+        "Options:\ntrue: yes\nfalse: no"
+    )
+    assert second_user.content == (
+        "Persona:\nalpha\n\n"
+        "Campaign:\nlaunch\n\n"
+        "Question:\nWhich ad?\n\n"
+        "Options:\nfirst\nsecond"
+    )
+    assert instructions == original
+
+
+def test_chatgpt_model_is_reused_for_the_same_name() -> None:
+    """A later persona reuses the model. A different name creates another one."""
+    instructions = [
+        {
+            "question_name": "like",
+            "question_type": "noul",
+            "instructions": {"question": "Do you like it?"},
+            "criteria": {"true": "yes", "false": "no"},
+        }
+    ]
+    state = {"persona": "alpha", "campaign": "launch"}
+    raw = SimpleNamespace(
+        usage_metadata={"input_tokens": 1, "output_tokens": 1},
+        response_metadata={"model_name": "chatgpt-test"},
+    )
+    inference._chatgpt_models.clear()
+    with patch("pipeline.inference.ChatOpenAI") as chat_cls:
+        chat_cls.return_value.with_structured_output.return_value.invoke.return_value = {
+            "raw": raw,
+            "parsed": inference._Answer(choice="yes", reason="Because."),
+            "parsing_error": None,
+        }
+        try:
+            run_chatgpt_inference("chatgpt-test", instructions, state)
+            run_chatgpt_inference("chatgpt-test", instructions, state)
+            assert chat_cls.call_count == 1
+            run_chatgpt_inference("chatgpt-other", instructions, state)
+            assert chat_cls.call_count == 2
+        finally:
+            inference._chatgpt_models.clear()
